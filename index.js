@@ -26,6 +26,7 @@ const userSchema = new mongoose.Schema(
     name: {
       type: String,
       trim: true,
+      uppercase: true,
     },
 
     email: {
@@ -159,6 +160,7 @@ app.post("/blogs", async (req, res) => {
   }
 });
 
+// Like
 app.patch("/blogs/:id/like", async (req, res) => {
   try {
     const { userId } = req.body;
@@ -189,6 +191,39 @@ app.patch("/blogs/:id/like", async (req, res) => {
     res.send({ success: true, likes: updatedBlog.likes });
   } catch (err) {
     res.status(500).send({ error: "Like failed" });
+  }
+});
+
+// update blog
+app.patch("/blogs/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updatedData = req.body;
+
+    const updated = await Blog.findByIdAndUpdate(id, updatedData, {
+      new: true,
+    });
+
+    res.send(updated);
+  } catch (err) {
+    res.status(500).send({ error: "Update failed" });
+  }
+});
+
+// Delete blog
+app.delete("/blogs/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const deleted = await Blog.findByIdAndDelete(id);
+
+    if (!deleted) {
+      return res.status(404).send({ error: "Blog not found" });
+    }
+
+    res.send({ success: true, message: "Blog deleted" });
+  } catch (error) {
+    res.status(500).send({ error: "Delete failed" });
   }
 });
 
@@ -243,6 +278,36 @@ app.post("/comments", async (req, res) => {
   }
 });
 
+// update Comments
+// ✅ CORRECT
+app.patch("/comments/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { text, userEmail } = req.body;
+
+    const comment = await Comment.findById(id);
+
+    if (!comment) {
+      return res.status(404).send({ error: "Comment not found" });
+    }
+
+    // 🔐 OWNER CHECK
+    if (comment.userEmail !== userEmail) {
+      return res.status(403).send({ error: "Unauthorized" });
+    }
+
+    const updated = await Comment.findByIdAndUpdate(
+      id,
+      { text },
+      { new: true },
+    );
+
+    res.send(updated);
+  } catch (err) {
+    res.status(500).send({ error: "Update failed" });
+  }
+});
+
 // GET COMMENTS BY BLOG
 app.get("/comments/:blogId", async (req, res) => {
   try {
@@ -253,6 +318,30 @@ app.get("/comments/:blogId", async (req, res) => {
     res.send(comments);
   } catch (err) {
     res.status(500).send({ error: "Failed to fetch comments" });
+  }
+});
+
+app.delete("/comments/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userEmail } = req.body;
+
+    const comment = await Comment.findById(id);
+
+    if (!comment) {
+      return res.status(404).send({ error: "Comment not found" });
+    }
+
+    // 🔐 OWNER CHECK
+    if (comment.userEmail !== userEmail) {
+      return res.status(403).send({ error: "Unauthorized" });
+    }
+
+    await Comment.findByIdAndDelete(id);
+
+    res.send({ success: true, message: "Comment deleted" });
+  } catch (err) {
+    res.status(500).send({ error: "Delete failed" });
   }
 });
 

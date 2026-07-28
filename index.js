@@ -20,9 +20,7 @@ mongoose
   .then(() => console.log("MongoDB Connected"))
   .catch((err) => console.log(err));
 
-  
-
-  // user Schema
+// user Schema
 const userSchema = new mongoose.Schema(
   {
     name: {
@@ -44,13 +42,23 @@ const userSchema = new mongoose.Schema(
     },
   },
   {
-    timestamps: true,   // createdAt, updatedAt
-    versionKey: false,  // ❌ removes __v
-  }
+    timestamps: true, // createdAt, updatedAt
+    versionKey: false, // ❌ removes __v
+  },
 );
 
 // model
 const User = mongoose.model("User", userSchema);
+
+// All get
+app.get("/users", async (req, res) => {
+  try {
+    const users = await User.find();
+    res.send(users);
+  } catch (error) {
+    res.status(500).send({ error: "Failed to fetch users" });
+  }
+});
 
 // post
 app.post("/users", async (req, res) => {
@@ -84,7 +92,6 @@ app.post("/users", async (req, res) => {
   }
 });
 
-
 // blog Schema
 const blogSchema = new mongoose.Schema(
   {
@@ -95,56 +102,159 @@ const blogSchema = new mongoose.Schema(
     authorName: String,
     authorEmail: String,
 
-    tags: [String],
-
     likes: [String], // user emails
-    bookmarks: [String],
-
-    readingTime: Number,
 
     createdAt: {
       type: Date,
       default: Date.now,
     },
   },
-  { versionKey: false }
+  { versionKey: false },
 );
 
 const Blog = mongoose.model("Blog", blogSchema);
 
+// All get
+app.get("/blogs", async (req, res) => {
+  try {
+    const blogs = await Blog.find();
+    res.send(blogs);
+  } catch (error) {
+    res.status(500).send({ error: "Failed to fetch users" });
+  }
+});
+
+// post-blog
+app.post("/blogs", async (req, res) => {
+  try {
+    const { title, content, image, authorName, authorEmail } = req.body;
+
+    // basic validation
+    if (!title || !content) {
+      return res.status(400).send({
+        error: "Title and content are required",
+      });
+    }
+
+    const newBlog = new Blog({
+      title,
+      content,
+      image,
+      authorName,
+      authorEmail,
+      likes: [],
+    });
+
+    const savedBlog = await newBlog.save();
+
+    res.status(201).send({
+      message: "Blog created successfully",
+      blog: savedBlog,
+    });
+  } catch (err) {
+    res.status(500).send({
+      error: "Failed to create blog",
+      details: err.message,
+    });
+  }
+});
+
+app.patch("/blogs/:id/like", async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const { id } = req.params;
+
+    const blog = await Blog.findById(id);
+
+    if (!blog) {
+      return res.status(404).send({ error: "Blog not found" });
+    }
+
+    const alreadyLiked = blog.likes.includes(userId);
+
+    let updatedLikes;
+
+    if (alreadyLiked) {
+      updatedLikes = blog.likes.filter((u) => u !== userId);
+    } else {
+      updatedLikes = [...blog.likes, userId];
+    }
+
+    const updatedBlog = await Blog.findByIdAndUpdate(
+      id,
+      { likes: updatedLikes },
+      { new: true },
+    );
+
+    res.send({ success: true, likes: updatedBlog.likes });
+  } catch (err) {
+    res.status(500).send({ error: "Like failed" });
+  }
+});
 
 // comment Schema
 const commentSchema = new mongoose.Schema(
   {
-    blogId: String,
-    userEmail: String,
-    userName: String,
-    text: String,
+    blogId: {
+      type: mongoose.Schema.Types.ObjectId,
+      required: true,
+      ref: "Blog",
+    },
+    userEmail: {
+      type: String,
+      required: true,
+    },
+    userName: {
+      type: String,
+      required: true,
+    },
+    text: {
+      type: String,
+      required: true,
+      trim: true,
+    },
   },
-  { timestamps: true, versionKey: false }
+  { timestamps: true, versionKey: false },
 );
 
 const Comment = mongoose.model("Comment", commentSchema);
 
-
-
-// ADD COMMENT
 app.post("/comments", async (req, res) => {
-  const comment = new Comment(req.body);
-  await comment.save();
-  res.send(comment);
+  try {
+    const { blogId, userEmail, userName, text } = req.body;
+
+    // 🔐 validation
+    if (!blogId || !text) {
+      return res.status(400).send({ error: "Missing fields" });
+    }
+
+    const comment = new Comment({
+      blogId,
+      userEmail,
+      userName,
+      text,
+    });
+
+    await comment.save();
+
+    res.status(201).send(comment);
+  } catch (err) {
+    res.status(500).send({ error: "Failed to add comment" });
+  }
 });
 
 // GET COMMENTS BY BLOG
 app.get("/comments/:blogId", async (req, res) => {
-  const comments = await Comment.find({ blogId: req.params.blogId });
-  res.send(comments);
+  try {
+    const { blogId } = req.params;
+
+    const comments = await Comment.find({ blogId }).sort({ createdAt: -1 });
+
+    res.send(comments);
+  } catch (err) {
+    res.status(500).send({ error: "Failed to fetch comments" });
+  }
 });
-
-
-
-
-
 
 app.listen(port, () => {
   console.log(`Blog server on port ${port}`);

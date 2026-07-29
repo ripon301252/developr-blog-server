@@ -4,7 +4,7 @@ const cors = require("cors");
 const mongoose = require("mongoose");
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 5000;
 
 // middle ware
 app.use(cors());
@@ -20,6 +20,49 @@ mongoose
   .then(() => console.log("MongoDB Connected"))
   .catch((err) => console.log(err));
 
+// firebase admin
+const admin = require("firebase-admin");
+const serviceAccount = require("./developer-blog-models-c451b-firebase-adminsdk.json");
+
+console.log("ADMIN:", admin);
+console.log("SERVICE:", serviceAccount);
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
+// token verify
+const verifyFirebaseToken = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader) {
+    return res.status(401).send({ error: "Unauthorized" });
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    req.user = decoded; // email থাকবে এখানে
+    next();
+  } catch (err) {
+    return res.status(403).send({ error: "Invalid token" });
+  }
+};
+
+// verify admin
+const verifyAdmin = async (req, res, next) => {
+  const email = req.user.email;
+
+  const user = await User.findOne({ email });
+
+  if (user?.role !== "admin") {
+    return res.status(403).send({ error: "Forbidden" });
+  }
+
+  next();
+};
+
 // user Schema
 const userSchema = new mongoose.Schema(
   {
@@ -28,7 +71,6 @@ const userSchema = new mongoose.Schema(
       trim: true,
       uppercase: true,
     },
-
     email: {
       type: String,
       required: true,
@@ -36,15 +78,19 @@ const userSchema = new mongoose.Schema(
       lowercase: true,
       trim: true,
     },
-
     photoURL: {
       type: String,
       default: "",
     },
+    role: {
+      type: String,
+      enum: ["blogger", "admin"],
+      default: "blogger",
+    },
   },
   {
-    timestamps: true, // createdAt, updatedAt
-    versionKey: false, // ❌ removes __v
+    timestamps: true,
+    versionKey: false,
   },
 );
 
@@ -59,6 +105,19 @@ app.get("/users", async (req, res) => {
   } catch (error) {
     res.status(500).send({ error: "Failed to fetch users" });
   }
+});
+
+app.get("/users/:email", verifyFirebaseToken, async (req, res) => {
+  const email = req.params.email;
+
+  // 🔥 user can only access his own data
+  if (req.user.email !== email) {
+    return res.status(403).send({ error: "Forbidden" });
+  }
+
+  const user = await User.findOne({ email });
+
+  res.send(user);
 });
 
 // post
@@ -112,11 +171,11 @@ const blogSchema = new mongoose.Schema(
   },
   { versionKey: false },
 );
-
+// model
 const Blog = mongoose.model("Blog", blogSchema);
 
 // All get
-app.get("/blogs", async (req, res) => {
+app.get("/blogs", verifyFirebaseToken, async (req, res) => {
   try {
     const blogs = await Blog.find();
     res.send(blogs);
@@ -126,7 +185,7 @@ app.get("/blogs", async (req, res) => {
 });
 
 // post-blog
-app.post("/blogs", async (req, res) => {
+app.post("/blogs", verifyFirebaseToken, async (req, res) => {
   try {
     const { title, content, image, authorName, authorEmail } = req.body;
 
@@ -137,12 +196,14 @@ app.post("/blogs", async (req, res) => {
       });
     }
 
+    const userEmail = req.user.email;
+
     const newBlog = new Blog({
       title,
       content,
       image,
       authorName,
-      authorEmail,
+      authorEmail: userEmail, // ✅ secure
       likes: [],
     });
 
@@ -161,9 +222,9 @@ app.post("/blogs", async (req, res) => {
 });
 
 // Like
-app.patch("/blogs/:id/like", async (req, res) => {
+app.patch("/blogs/:id/like", verifyFirebaseToken, async (req, res) => {
   try {
-    const { userId } = req.body;
+    const userEmail = req.user.email; // ✅ trusted
     const { id } = req.params;
 
     const blog = await Blog.findById(id);
@@ -172,14 +233,16 @@ app.patch("/blogs/:id/like", async (req, res) => {
       return res.status(404).send({ error: "Blog not found" });
     }
 
-    const alreadyLiked = blog.likes.includes(userId);
+    const alreadyLiked = blog.likes.includes(userEmail);
 
     let updatedLikes;
 
     if (alreadyLiked) {
-      updatedLikes = blog.likes.filter((u) => u !== userId);
+      // unlike
+      updatedLikes = blog.likes.filter((u) => u !== userEmail);
     } else {
-      updatedLikes = [...blog.likes, userId];
+      // like
+      updatedLikes = [...blog.likes, userEmail];
     }
 
     const updatedBlog = await Blog.findByIdAndUpdate(
@@ -195,13 +258,31 @@ app.patch("/blogs/:id/like", async (req, res) => {
 });
 
 // update blog
-app.patch("/blogs/:id", async (req, res) => {
+app.patch("/blogs/:id", verifyFirebaseToken, async (req, res) => {
   try {
-    const { id } = req.params;
+    const { id } = req.params; // ✅ step 1
+
+    const blog = await Blog.findById(id); // ✅ step 2
+
+    if (!blog) {
+      return res.status(404).send({ error: "Blog not found" });
+    }
+
+    // 🔐 step 3: owner check
+    if (blog.authorEmail !== req.user.email) {
+      return res.status(403).send({ error: "Unauthorized" });
+    }
+
     const updatedData = req.body;
 
+    // 🔐 prevent sensitive field overwrite
+    delete updatedData.authorEmail;
+    delete updatedData.likes;
+
+    // ✅ step 4: update
     const updated = await Blog.findByIdAndUpdate(id, updatedData, {
       new: true,
+      runValidators: true, // ✅ validation on update
     });
 
     res.send(updated);
@@ -211,15 +292,23 @@ app.patch("/blogs/:id", async (req, res) => {
 });
 
 // Delete blog
-app.delete("/blogs/:id", async (req, res) => {
+app.delete("/blogs/:id", verifyFirebaseToken, async (req, res) => {
   try {
-    const { id } = req.params;
+    const { id } = req.params; // ✅ step 1
 
-    const deleted = await Blog.findByIdAndDelete(id);
+    const blog = await Blog.findById(id); // ✅ step 2
 
-    if (!deleted) {
+    if (!blog) {
       return res.status(404).send({ error: "Blog not found" });
     }
+
+    // 🔐 step 3: owner check
+    if (blog.authorEmail !== req.user.email) {
+      return res.status(403).send({ error: "Unauthorized" });
+    }
+
+    // ✅ step 4: delete
+    await Blog.findByIdAndDelete(id);
 
     res.send({ success: true, message: "Blog deleted" });
   } catch (error) {
@@ -280,7 +369,8 @@ app.post("/comments", async (req, res) => {
 
 // update Comments
 // ✅ CORRECT
-app.patch("/comments/:id", async (req, res) => {
+app.patch("/comments/:id", verifyFirebaseToken, async (req, res) => {
+  const userEmail = req.user.email;
   try {
     const { id } = req.params;
     const { text, userEmail } = req.body;
@@ -321,7 +411,8 @@ app.get("/comments/:blogId", async (req, res) => {
   }
 });
 
-app.delete("/comments/:id", async (req, res) => {
+app.delete("/comments/:id", verifyFirebaseToken, async (req, res) => {
+  const userEmail = req.user.email;
   try {
     const { id } = req.params;
     const { userEmail } = req.body;

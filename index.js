@@ -84,8 +84,13 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ["blogger", "admin"],
-      default: "blogger",
+      enum: ["user", "admin"],
+      default: "user",
+    },
+    status: {
+      type: String,
+      enum: ["active", "blocked"],
+      default: "active",
     },
   },
   {
@@ -98,16 +103,68 @@ const userSchema = new mongoose.Schema(
 const User = mongoose.model("User", userSchema);
 
 // All get
+// app.get("/users", async (req, res) => {
+//   try {
+//     const users = await User.find();
+//     res.send(users);
+//   } catch (error) {
+//     res.status(500).send({ error: "Failed to fetch users" });
+//   }
+// });
+
+// All get & search
 app.get("/users", async (req, res) => {
   try {
-    const users = await User.find();
-    res.send(users);
+    const search = req.query.search || "";
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+
+    const query = {
+      $or: [
+        { name: { $regex: search, $options: "i" } },
+        { email: { $regex: search, $options: "i" } },
+      ],
+    };
+
+    // 👉 total count (IMPORTANT)
+    const total = await User.countDocuments(query);
+
+    // 👉 paginated users
+    const users = await User.find(query)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit) // 🔥 pagination magic
+      .limit(limit);
+
+    res.send({ users, total }); // 🔥 must send both
   } catch (error) {
     res.status(500).send({ error: "Failed to fetch users" });
   }
 });
 
-app.get("/users/:email", verifyFirebaseToken, async (req, res) => {
+// single get
+app.get("/users/:id", verifyFirebaseToken, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const result = await User.findById(id);
+
+    if (!result) {
+      return res.status(404).send({
+        success: false,
+        message: "user not found",
+      });
+    }
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
+// role
+app.get("/users/:email/role", verifyFirebaseToken, async (req, res) => {
   const email = req.params.email;
 
   // 🔥 user can only access his own data
@@ -121,7 +178,7 @@ app.get("/users/:email", verifyFirebaseToken, async (req, res) => {
 });
 
 // post
-app.post("/users", async (req, res) => {
+app.post("/users/register", async (req, res) => {
   try {
     const { name, email, photoURL } = req.body;
 
@@ -151,6 +208,76 @@ app.post("/users", async (req, res) => {
     });
   }
 });
+
+// patch
+app.patch("/users/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const updateData = req.body;
+
+    const result = await User.findByIdAndUpdate(id, updateData, {
+      new: true, // ✅ updated data return করবে
+      runValidators: true, // ✅ schema validation apply হবে
+    });
+
+    if (!result) {
+      return res.status(404).send({ error: "User not found" });
+    }
+
+    res.send(result);
+  } catch (err) {
+    console.log(err.message);
+    res.status(500).send({ error: "Update failed" });
+  }
+});
+
+// Delete
+app.delete("/users/:id", async (req, res) => {
+  try {
+    const id = req.params.id; // ✅ ঠিক
+
+    const result = await User.findByIdAndDelete(id); // ✅ correct method
+
+    if (!result) {
+      return res.status(404).send({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    res.send({
+      success: true,
+      message: "User deleted successfully",
+    });
+  } catch (err) {
+    res.status(500).send({
+      success: false,
+      message: err.message,
+    });
+  }
+});
+
+// dashboard-status
+app.get("/dashboard-stats", verifyFirebaseToken, async (req, res) => {
+  try {
+    const totalUsers = await User.countDocuments();
+    const totalAdmins = await User.countDocuments({ role: "admin" });
+    const totalBlogs = await Blog.countDocuments();
+    const totalComments = await Comment.countDocuments();
+
+    res.send({
+      totalUsers,
+      totalAdmins,
+      totalBlogs,
+      totalComments,
+    });
+
+  } catch (err) {
+    res.status(500).send({ error: err.message });
+  }
+});
+
+// ===================================================
 
 // blog Schema
 const blogSchema = new mongoose.Schema(

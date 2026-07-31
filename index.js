@@ -2,9 +2,12 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
+const http = require("http");
+const { Server } = require("socket.io"); // ✅ correct import
 
 const app = express();
 const port = process.env.PORT || 5000;
+const server = http.createServer(app); // ✅ create server
 
 // middle ware
 app.use(cors());
@@ -19,6 +22,51 @@ mongoose
   .connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB Connected"))
   .catch((err) => console.log(err));
+
+// 🔌 socket setup
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+  },
+});
+
+// 🧠 store online users
+let onlineUsers = {};
+
+io.on("connection", (socket) => {
+  console.log("User connected:", socket.id);
+
+  // join
+  socket.on("join", (email) => {
+    onlineUsers[email] = socket.id;
+    console.log("Online Users:", onlineUsers);
+  });
+
+  // send message
+  socket.on("sendMessage", (data) => {
+    const { receiverEmail } = data;
+
+    const receiverSocket = onlineUsers[receiverEmail];
+
+    if (receiverSocket) {
+      io.to(receiverSocket).emit("receiveMessage", data);
+    }
+
+    // sender side update
+    socket.emit("receiveMessage", data);
+  });
+
+  socket.on("disconnect", () => {
+    console.log("User disconnected:", socket.id);
+
+    // 🧹 remove user from online list
+    for (let email in onlineUsers) {
+      if (onlineUsers[email] === socket.id) {
+        delete onlineUsers[email];
+      }
+    }
+  });
+});
 
 // firebase admin
 const admin = require("firebase-admin");
@@ -113,11 +161,41 @@ const User = mongoose.model("User", userSchema);
 // });
 
 // All get & search
+// app.get("/users", async (req, res) => {
+//   try {
+//     const search = req.query.search || "";
+//     const page = parseInt(req.query.page) || 1;
+//     const limit = parseInt(req.query.limit) || 5;
+
+//     const query = {
+//       $or: [
+//         { name: { $regex: search, $options: "i" } },
+//         { email: { $regex: search, $options: "i" } },
+//       ],
+//     };
+
+//     // 👉 total count (IMPORTANT)
+//     const total = await User.countDocuments(query);
+
+//     // 👉 paginated users
+//     const users = await User.find(query)
+//       .sort({ createdAt: -1 })
+//       .skip((page - 1) * limit) // 🔥 pagination magic
+//       .limit(limit);
+
+//     res.send({ users, total }); // 🔥 must send both
+//   } catch (error) {
+//     res.status(500).send({ error: "Failed to fetch users" });
+//   }
+// });
+
 app.get("/users", async (req, res) => {
   try {
     const search = req.query.search || "";
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 5;
+
+    // 🔥 limit optional
+    const limit = req.query.limit ? parseInt(req.query.limit) : null;
 
     const query = {
       $or: [
@@ -126,16 +204,18 @@ app.get("/users", async (req, res) => {
       ],
     };
 
-    // 👉 total count (IMPORTANT)
     const total = await User.countDocuments(query);
 
-    // 👉 paginated users
-    const users = await User.find(query)
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit) // 🔥 pagination magic
-      .limit(limit);
+    let mongoQuery = User.find(query).sort({ createdAt: -1 });
 
-    res.send({ users, total }); // 🔥 must send both
+    // 👉 only apply pagination if limit exists
+    if (limit) {
+      mongoQuery = mongoQuery.skip((page - 1) * limit).limit(limit);
+    }
+
+    const users = await mongoQuery;
+
+    res.send({ users, total });
   } catch (error) {
     res.status(500).send({ error: "Failed to fetch users" });
   }
@@ -271,7 +351,6 @@ app.get("/dashboard-stats", verifyFirebaseToken, async (req, res) => {
       totalBlogs,
       totalComments,
     });
-
   } catch (err) {
     res.status(500).send({ error: err.message });
   }
@@ -563,6 +642,50 @@ app.delete("/comments/:id", verifyFirebaseToken, async (req, res) => {
   }
 });
 
-app.listen(port, () => {
+// =================================
+// messageSchema
+const messageSchema = new mongoose.Schema(
+  {
+    senderEmail: String,
+    receiverEmail: String,
+    text: String,
+  },
+  { timestamps: true },
+);
+
+const Message = mongoose.model("Message", messageSchema);
+
+// send message
+app.post("/messages", async (req, res) => {
+  try {
+    const message = req.body;
+
+    console.log("INCOMING 👉", message); // DEBUG
+
+    const newMessage = new Message(message);
+    await newMessage.save();
+
+    res.send(newMessage);
+  } catch (err) {
+    console.error("SERVER ERROR ❌", err);
+    res.status(500).send({ error: err.message });
+  }
+});
+
+// get messages between 2 users
+app.get("/messages", async (req, res) => {
+  const { email, chatWith } = req.query;
+
+  const result = await Message.find({
+    $or: [
+      { senderEmail: email, receiverEmail: chatWith },
+      { senderEmail: chatWith, receiverEmail: email },
+    ],
+  }).sort({ createdAt: 1 });
+
+  res.send(result);
+});
+
+server.listen(port, () => {
   console.log(`Blog server on port ${port}`);
 });

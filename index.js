@@ -151,44 +151,16 @@ const userSchema = new mongoose.Schema(
 const User = mongoose.model("User", userSchema);
 
 // All get
-// app.get("/users", async (req, res) => {
-//   try {
-//     const users = await User.find();
-//     res.send(users);
-//   } catch (error) {
-//     res.status(500).send({ error: "Failed to fetch users" });
-//   }
-// });
+app.get("/public/users", async (req, res) => {
+  try {
+    const users = await User.find();
+    res.send(users);
+  } catch (error) {
+    res.status(500).send({ error: "Failed to fetch users" });
+  }
+});
 
 // All get & search
-// app.get("/users", async (req, res) => {
-//   try {
-//     const search = req.query.search || "";
-//     const page = parseInt(req.query.page) || 1;
-//     const limit = parseInt(req.query.limit) || 5;
-
-//     const query = {
-//       $or: [
-//         { name: { $regex: search, $options: "i" } },
-//         { email: { $regex: search, $options: "i" } },
-//       ],
-//     };
-
-//     // 👉 total count (IMPORTANT)
-//     const total = await User.countDocuments(query);
-
-//     // 👉 paginated users
-//     const users = await User.find(query)
-//       .sort({ createdAt: -1 })
-//       .skip((page - 1) * limit) // 🔥 pagination magic
-//       .limit(limit);
-
-//     res.send({ users, total }); // 🔥 must send both
-//   } catch (error) {
-//     res.status(500).send({ error: "Failed to fetch users" });
-//   }
-// });
-
 app.get("/users", async (req, res) => {
   try {
     const search = req.query.search || "";
@@ -389,6 +361,17 @@ app.get("/blogs", verifyFirebaseToken, async (req, res) => {
     res.status(500).send({ error: "Failed to fetch users" });
   }
 });
+
+// Public blogs (no token needed)
+app.get("/public/blogs", async (req, res) => {
+  try {
+    const blogs = await Blog.find().select("authorName authorPhoto image title");
+    res.send(blogs);
+  } catch (error) {
+    res.status(500).send({ error: "Failed to fetch blogs" });
+  }
+});
+
 
 // post-blog
 app.post("/blogs", verifyFirebaseToken, async (req, res) => {

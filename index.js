@@ -70,13 +70,25 @@ io.on("connection", (socket) => {
 
 // firebase admin
 const admin = require("firebase-admin");
-const serviceAccount = require("./developer-blog-models-c451b-firebase-adminsdk.json");
+// serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_KEY);
 
+// console.log("ADMIN:", admin);
+// console.log("SERVICE:", serviceAccount);
+
+// admin.initializeApp({
+//   credential: admin.credential.cert(serviceAccount),
+// });
+
+
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_KEY);
 console.log("ADMIN:", admin);
 console.log("SERVICE:", serviceAccount);
 
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
+  credential: admin.credential.cert({
+    ...serviceAccount,
+    private_key: serviceAccount.private_key.replace(/\\n/g, "\n"),
+  }),
 });
 
 // token verify

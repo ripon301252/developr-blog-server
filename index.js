@@ -349,9 +349,15 @@ const blogSchema = new mongoose.Schema(
     content: { type: String, required: true },
     image: { type: String },
 
-    authorName: String,
-    authorEmail: String,
-
+    authorName: {
+      type: String,
+      required: true,
+      uppercase: true,
+    },
+    authorEmail: {
+      type: String,
+      required: true,
+    },
     likes: [String], // user emails
 
     createdAt: {

@@ -79,7 +79,6 @@ const admin = require("firebase-admin");
 //   credential: admin.credential.cert(serviceAccount),
 // });
 
-
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_KEY);
 console.log("ADMIN:", admin);
 console.log("SERVICE:", serviceAccount);
@@ -92,6 +91,24 @@ admin.initializeApp({
 });
 
 // token verify
+// const verifyFirebaseToken = async (req, res, next) => {
+//   const authHeader = req.headers.authorization;
+
+//   if (!authHeader) {
+//     return res.status(401).send({ error: "Unauthorized" });
+//   }
+
+//   const token = authHeader.split(" ")[1];
+
+//   try {
+//     const decoded = await admin.auth().verifyIdToken(token);
+//     req.user = decoded; // email থাকবে এখানে
+//     next();
+//   } catch (err) {
+//     return res.status(403).send({ error: "Invalid token" });
+//   }
+// };
+
 const verifyFirebaseToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
 
@@ -103,7 +120,15 @@ const verifyFirebaseToken = async (req, res, next) => {
 
   try {
     const decoded = await admin.auth().verifyIdToken(token);
-    req.user = decoded; // email থাকবে এখানে
+
+    // 🔥 DB থেকে user find করো
+    const user = await User.findOne({ email: decoded.email });
+
+    req.user = {
+      email: decoded.email,
+      role: user?.role || "user", // ✅ MUST
+    };
+
     next();
   } catch (err) {
     return res.status(403).send({ error: "Invalid token" });
@@ -365,31 +390,52 @@ const blogSchema = new mongoose.Schema(
       default: Date.now,
     },
   },
-  { versionKey: false },
+  {
+    timestamps: true,
+    versionKey: false,
+  },
 );
 // model
 const Blog = mongoose.model("Blog", blogSchema);
 
-// All get
-app.get("/blogs", verifyFirebaseToken, async (req, res) => {
+// GET all blogs
+app.get("/blogs", async (req, res) => {
   try {
-    const blogs = await Blog.find();
-    res.send(blogs);
-  } catch (error) {
-    res.status(500).send({ error: "Failed to fetch users" });
-  }
-});
+    const { search = "", page = 1, limit = 5 } = req.query;
 
-// Public blogs (no token needed)
-app.get("/public/blogs", async (req, res) => {
-  try {
-    const blogs = await Blog.find().select("authorName authorPhoto image title");
-    res.send(blogs);
-  } catch (error) {
+    const query = {
+      title: { $regex: search, $options: "i" },
+    };
+
+    const blogs = await Blog.find(query)
+      .skip((page - 1) * limit)
+      .limit(Number(limit))
+      .sort({ createdAt: -1 });
+
+    const total = await Blog.countDocuments(query);
+
+    res.send({ blogs, total });
+  } catch (err) {
     res.status(500).send({ error: "Failed to fetch blogs" });
   }
 });
 
+// GET single blog by id
+app.get("/blogs/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const blog = await Blog.findById(id);
+
+    if (!blog) {
+      return res.status(404).send({ error: "Blog not found" });
+    }
+
+    res.send(blog);
+  } catch (err) {
+    res.status(500).send({ error: "Failed to fetch blog" });
+  }
+});
 
 // post-blog
 app.post("/blogs", verifyFirebaseToken, async (req, res) => {
@@ -499,25 +545,54 @@ app.patch("/blogs/:id", verifyFirebaseToken, async (req, res) => {
 });
 
 // Delete blog
+// app.delete("/blogs/:id", verifyFirebaseToken, async (req, res) => {
+//   try {
+//     const { id } = req.params; // ✅ step 1
+
+//     const blog = await Blog.findById(id); // ✅ step 2
+
+//     if (!blog) {
+//       return res.status(404).send({ error: "Blog not found" });
+//     }
+
+//     // 🔐 step 3: owner check
+//     if (blog.authorEmail !== req.user.email) {
+//       return res.status(403).send({ error: "Unauthorized" });
+//     }
+
+//     // ✅ step 4: delete
+//     await Blog.findByIdAndDelete(id);
+
+//     res.send({ success: true, message: "Blog deleted" });
+//   } catch (error) {
+//     res.status(500).send({ error: "Delete failed" });
+//   }
+// });
+
 app.delete("/blogs/:id", verifyFirebaseToken, async (req, res) => {
   try {
-    const { id } = req.params; // ✅ step 1
+    const { id } = req.params;
 
-    const blog = await Blog.findById(id); // ✅ step 2
+    const blog = await Blog.findById(id);
 
     if (!blog) {
       return res.status(404).send({ error: "Blog not found" });
     }
 
-    // 🔐 step 3: owner check
-    if (blog.authorEmail !== req.user.email) {
+    console.log("USER:", req.user);
+    console.log("BLOG:", blog.authorEmail);
+
+    // 🔐 Admin OR Owner check
+    if (
+      req.user.role !== "admin" &&
+      blog.authorEmail.toLowerCase() !== req.user.email.toLowerCase()
+    ) {
       return res.status(403).send({ error: "Unauthorized" });
     }
 
-    // ✅ step 4: delete
     await Blog.findByIdAndDelete(id);
 
-    res.send({ success: true, message: "Blog deleted" });
+    res.send({ success: true, message: "Blog deleted successfully" });
   } catch (error) {
     res.status(500).send({ error: "Delete failed" });
   }
@@ -539,6 +614,10 @@ const commentSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    userImage: {
+      type: String,
+      required: true,
+    },
     text: {
       type: String,
       required: true,
@@ -552,7 +631,7 @@ const Comment = mongoose.model("Comment", commentSchema);
 
 app.post("/comments", async (req, res) => {
   try {
-    const { blogId, userEmail, userName, text } = req.body;
+    const { blogId, userEmail, userName, userImage, text } = req.body;
 
     // 🔐 validation
     if (!blogId || !text) {
@@ -563,6 +642,7 @@ app.post("/comments", async (req, res) => {
       blogId,
       userEmail,
       userName,
+      userImage,
       text,
     });
 

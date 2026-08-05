@@ -401,7 +401,7 @@ const Blog = mongoose.model("Blog", blogSchema);
 // GET all blogs
 app.get("/blogs", async (req, res) => {
   try {
-    const { search = "", page = 1, limit = 5 } = req.query;
+    const { search = "", page = 1, limit } = req.query;
 
     const query = {
       title: { $regex: search, $options: "i" },
